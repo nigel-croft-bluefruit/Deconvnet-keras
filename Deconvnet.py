@@ -13,19 +13,22 @@ import numpy as np
 import sys
 import time
 from PIL import Image
-from keras.layers import (
+from tensorflow.keras.layers import (
         Input,
         InputLayer,
         Flatten,
         Activation,
         Dense)
-from keras.layers.convolutional import (
-        Convolution2D,
+from tensorflow.keras.layers import (
+        Convolution2D, Conv2D,
         MaxPooling2D)
-from keras.activations import *
-from keras.models import Model, Sequential
-from keras.applications import vgg16, imagenet_utils
-import keras.backend as K
+from tensorflow.keras.activations import *
+from tensorflow.keras.models import Model, Sequential
+from tensorflow.keras.applications import vgg16, imagenet_utils
+import tensorflow.keras.backend as K
+
+import tensorflow as tf
+tf.compat.v1.disable_v2_behavior()
 
 
 class DConvolution2D(object):
@@ -41,38 +44,45 @@ class DConvolution2D(object):
         '''
         self.layer = layer
 
-        weights = layer.get_weights()
+        #weights = layer.get_weights()
+        weights = K.batch_get_value(layer.weights) # WORK-AROUND FOR TF BUG
+        
         W = weights[0]
         b = weights[1]
-
+        #print(W.shape)
         # Set up_func for DConvolution2D
-        nb_up_filter = W.shape[0]
-        nb_up_row = W.shape[2]
-        nb_up_col = W.shape[3]
+        #nb_up_filter = W.shape[0]
+        #nb_up_row = W.shape[2]
+        #nb_up_col = W.shape[3]
+        nb_up_filter = W.shape[3]
+        nb_up_row = W.shape[0]
+        nb_up_col = W.shape[1]
         input = Input(shape = layer.input_shape[1:])
-        output = Convolution2D(
-                nb_filter = nb_up_filter, 
-                nb_row = nb_up_row, 
-                nb_col = nb_up_col, 
-                border_mode = 'same',
+        output = Conv2D(
+                filters = nb_up_filter, 
+                kernel_size = (nb_up_row, nb_up_col),
+                padding = 'same',
                 weights = [W, b]
                 )(input)
         self.up_func = K.function([input, K.learning_phase()], output)
 
+        #print(f"n: {(nb_up_filter, nb_up_row, nb_up_col)}  {layer.input_shape}")
         # Flip W horizontally and vertically, 
         # and set down_func for DConvolution2D
-        W = np.transpose(W, (1, 0, 2, 3))
-        W = W[:, :, ::-1, ::-1]
-        nb_down_filter = W.shape[0]
-        nb_down_row = W.shape[2]
-        nb_down_col = W.shape[3]
+        #W = np.transpose(W, (1, 0, 2, 3))
+        W = np.transpose(W, (0, 1, 3, 2)) #swap in/out channels
+        #W = W[:, :, ::-1, ::-1]
+        W = W[::-1, ::-1, :, :]# reverse elements in kernel
+
+        nb_down_filter = W.shape[3]
+        nb_down_row = W.shape[0]
+        nb_down_col = W.shape[1]
         b = np.zeros(nb_down_filter)
         input = Input(shape = layer.output_shape[1:])
-        output = Convolution2D(
-                nb_filter = nb_down_filter, 
-                nb_row = nb_down_row, 
-                nb_col = nb_down_col, 
-                border_mode = 'same',
+        output = Conv2D(
+                filters = nb_down_filter, 
+                kernel_size = (nb_down_row, nb_down_col),
+                padding = 'same',
                 weights = [W, b]
                 )(input)
         self.down_func = K.function([input, K.learning_phase()], output)
@@ -216,28 +226,35 @@ class DPooling(object):
         out_shape = list(input.shape)
         row_poolsize = int(poolsize[0])
         col_poolsize = int(poolsize[1])
-        out_shape[2] = out_shape[2] / poolsize[0]
-        out_shape[3] = out_shape[3] / poolsize[1]
+        #out_shape[2] = int(out_shape[2] / poolsize[0])
+        #out_shape[3] = int(out_shape[3] / poolsize[1])
+        out_shape[1] = int(out_shape[1] / poolsize[0])
+        out_shape[2] = int(out_shape[2] / poolsize[1])
         pooled = np.zeros(out_shape)
         
+        #for sample in range(input.shape[0]):
+        #    for dim in range(input.shape[1]):
+        #        for row in range(out_shape[2]):
+        #            for col in range(out_shape[3]):
         for sample in range(input.shape[0]):
-            for dim in range(input.shape[1]):
-                for row in range(out_shape[2]):
-                    for col in range(out_shape[3]):
+            for dim in range(input.shape[3]):
+                for row in range(out_shape[1]):
+                    for col in range(out_shape[2]):
                         patch = input[sample, 
-                                dim, 
                                 row * row_poolsize : (row + 1) * row_poolsize,
-                                col * col_poolsize : (col + 1) * col_poolsize]
+                                col * col_poolsize : (col + 1) * col_poolsize,
+                                dim]
                         max_value = patch.max()
-                        pooled[sample, dim, row, col] = max_value
+                        pooled[sample, row, col, dim] = max_value
                         max_col_index = patch.argmax(axis = 1)
                         max_cols = patch.max(axis = 1)
                         max_row = max_cols.argmax()
                         max_col = max_col_index[max_row]
                         switch[sample, 
-                                dim, 
                                 row * row_poolsize + max_row, 
-                                col * col_poolsize + max_col]  = 1
+                                col * col_poolsize + max_col,
+                                dim ]  = 1
+        #print(pooled.shape, switch.shape)
         return [pooled, switch]
     
     # Compute unpooled output using pooled data and switch
@@ -251,9 +268,12 @@ class DPooling(object):
         # Returns
             Unpooled result
         '''
-        tile = np.ones((switch.shape[2] / input.shape[2], 
-            switch.shape[3] / input.shape[3]))
+        #tile = np.ones((switch.shape[2] / input.shape[2], 
+        #    switch.shape[3] / input.shape[3]))
+        tile = np.ones((1, switch.shape[1] // input.shape[1], 
+            switch.shape[2] // input.shape[2], 1))
         out = np.kron(input, tile)
+        print(input.shape, tile.shape, out.shape)
         unpooled = out * switch
         return unpooled
 
@@ -440,6 +460,7 @@ def visualize(model, data, layer_name, feature_to_visualize, visualize_mode):
     # Forward pass
     deconv_layers[0].up(data)
     for i in range(1, len(deconv_layers)):
+        #print(f"{i}: {deconv_layers[i - 1].up_data.shape}")
         deconv_layers[i].up(deconv_layers[i - 1].up_data)
 
     output = deconv_layers[-1].up_data
@@ -447,7 +468,7 @@ def visualize(model, data, layer_name, feature_to_visualize, visualize_mode):
     if output.ndim == 2:
         feature_map = output[:, feature_to_visualize]
     else:
-        feature_map = output[:, feature_to_visualize, :, :]
+        feature_map = output[:, :, :, feature_to_visualize]
     if 'max' == visualize_mode:
         max_activation = feature_map.max()
         temp = feature_map == max_activation
@@ -459,7 +480,7 @@ def visualize(model, data, layer_name, feature_to_visualize, visualize_mode):
     if 2 == output.ndim:
         output[:, feature_to_visualize] = feature_map
     else:
-        output[:, feature_to_visualize, :, :] = feature_map
+        output[:, :, :, feature_to_visualize] = feature_map
 
     # Backward pass
     deconv_layers[-1].down(output)
@@ -497,7 +518,7 @@ def main():
 
     model = vgg16.VGG16(weights = 'imagenet', include_top = True)
     layer_dict = dict([(layer.name, layer) for layer in model.layers])
-    if not layer_dict.has_key(layer_name):
+    if not layer_name in layer_dict:
         print('Wrong layer name')
         sys.exit()
 
@@ -522,5 +543,6 @@ def main():
     img = Image.fromarray(uint8_deconv, 'RGB')
     img.save('results/{}_{}_{}.png'.format(layer_name, feature_to_visualize, visualize_mode))
 
+    print('Saved: results/{}_{}_{}.png'.format(layer_name, feature_to_visualize, visualize_mode))
 if "__main__" == __name__:
     main()
