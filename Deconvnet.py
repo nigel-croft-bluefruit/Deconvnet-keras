@@ -49,11 +49,6 @@ class DConvolution2D(object):
         
         W = weights[0]
         b = weights[1]
-        #print(W.shape)
-        # Set up_func for DConvolution2D
-        #nb_up_filter = W.shape[0]
-        #nb_up_row = W.shape[2]
-        #nb_up_col = W.shape[3]
         nb_up_filter = W.shape[3]
         nb_up_row = W.shape[0]
         nb_up_col = W.shape[1]
@@ -66,12 +61,10 @@ class DConvolution2D(object):
                 )(input)
         self.up_func = K.function([input, K.learning_phase()], output)
 
-        #print(f"n: {(nb_up_filter, nb_up_row, nb_up_col)}  {layer.input_shape}")
         # Flip W horizontally and vertically, 
         # and set down_func for DConvolution2D
-        #W = np.transpose(W, (1, 0, 2, 3))
+        # For TF2.2 W=(kernel_row,kernel_col,in_channels,out_channels)
         W = np.transpose(W, (0, 1, 3, 2)) #swap in/out channels
-        #W = W[:, :, ::-1, ::-1]
         W = W[::-1, ::-1, :, :]# reverse elements in kernel
 
         nb_down_filter = W.shape[3]
@@ -185,7 +178,6 @@ class DPooling(object):
         '''
         self.layer = layer
         self.poolsize = layer.pool_size
-        # self.poolsize = layer.poolsize
     
     def up(self, data, learning_phase = 0):
         '''
@@ -226,16 +218,10 @@ class DPooling(object):
         out_shape = list(input.shape)
         row_poolsize = int(poolsize[0])
         col_poolsize = int(poolsize[1])
-        #out_shape[2] = int(out_shape[2] / poolsize[0])
-        #out_shape[3] = int(out_shape[3] / poolsize[1])
         out_shape[1] = int(out_shape[1] / poolsize[0])
         out_shape[2] = int(out_shape[2] / poolsize[1])
         pooled = np.zeros(out_shape)
         
-        #for sample in range(input.shape[0]):
-        #    for dim in range(input.shape[1]):
-        #        for row in range(out_shape[2]):
-        #            for col in range(out_shape[3]):
         for sample in range(input.shape[0]):
             for dim in range(input.shape[3]):
                 for row in range(out_shape[1]):
@@ -254,7 +240,6 @@ class DPooling(object):
                                 row * row_poolsize + max_row, 
                                 col * col_poolsize + max_col,
                                 dim ]  = 1
-        #print(pooled.shape, switch.shape)
         return [pooled, switch]
     
     # Compute unpooled output using pooled data and switch
@@ -268,12 +253,9 @@ class DPooling(object):
         # Returns
             Unpooled result
         '''
-        #tile = np.ones((switch.shape[2] / input.shape[2], 
-        #    switch.shape[3] / input.shape[3]))
         tile = np.ones((1, switch.shape[1] // input.shape[1], 
             switch.shape[2] // input.shape[2], 1))
         out = np.kron(input, tile)
-        print(input.shape, tile.shape, out.shape)
         unpooled = out * switch
         return unpooled
 
@@ -460,7 +442,6 @@ def visualize(model, data, layer_name, feature_to_visualize, visualize_mode):
     # Forward pass
     deconv_layers[0].up(data)
     for i in range(1, len(deconv_layers)):
-        #print(f"{i}: {deconv_layers[i - 1].up_data.shape}")
         deconv_layers[i].up(deconv_layers[i - 1].up_data)
 
     output = deconv_layers[-1].up_data
@@ -526,7 +507,6 @@ def main():
     img = Image.open(image_path)
     img = img.resize((224, 224))
     img_array = np.array(img)
-    img_array = np.transpose(img_array, (2, 0, 1))
     img_array = img_array[np.newaxis, :]
     img_array = img_array.astype(np.float)
     img_array = imagenet_utils.preprocess_input(img_array)
@@ -535,7 +515,6 @@ def main():
             layer_name, feature_to_visualize, visualize_mode)
     
     # postprocess and save image
-    deconv = np.transpose(deconv, (1, 2, 0))
     deconv = deconv - deconv.min()
     deconv *= 1.0 / (deconv.max() + 1e-8)
     deconv = deconv[:, :, ::-1]
