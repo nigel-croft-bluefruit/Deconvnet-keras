@@ -20,6 +20,9 @@
 # This notebook reproduces the results of https://github.com/jalused/Deconvnet-keras/blob/master/Deconvnet-keras.py after converting to use TF2.2
 
 # %cd /home/jupyter/dev/tflow/deconvnet/Deconvnet-keras
+# %reload_ext autoreload
+# %autoreload 2
+# %matplotlib inline
 
 import os
 import sys
@@ -31,44 +34,24 @@ import matplotlib.pyplot as plt
 model = vgg16.VGG16(weights = 'imagenet', include_top = True)
 
 
-def main(image_path, layer_name, feature_to_visualize, visualize_mode='all'):
+LAYER_NAME = 'block4_conv2'
+deconv_layers = create_deconv(model, LAYER_NAME)
 
-    #model = vgg16.VGG16(weights = 'imagenet', include_top = True)
-    layer_dict = dict([(layer.name, layer) for layer in model.layers])
-    if not layer_name in layer_dict:
-        print('Wrong layer name')
-        sys.exit()
+
+def main(image_path, feature_to_visualize, visualize_mode='all'):
 
     # Load data and preprocess
     img = Image.open(image_path)
     img = img.resize((224, 224))
     img_array = np.array(img)
-    #img_array = np.transpose(img_array, (2, 0, 1))
     img_array = img_array[np.newaxis, :]
     img_array = img_array.astype(np.float)
     img_array = imagenet_utils.preprocess_input(img_array)
     
-    deconv = visualize(model, img_array, 
-            layer_name, feature_to_visualize, visualize_mode)
+    deconv = visualize(deconv_layers, img_array, 
+            feature_to_visualize, visualize_mode)
     
     return deconv
-
-
-# #%debug
-result = main('./husky.jpg', 'block4_conv2', 46)
-
-    # postprocess and save image
-    #deconv = np.transpose(deconv, (1, 2, 0))
-    deconv = result
-    deconv = deconv - deconv.min()
-    deconv *= 1.0 / (deconv.max() + 1e-8)
-    deconv = deconv[:, :, ::-1]
-    uint8_deconv = (deconv * 255).astype(np.uint8)
-    img = Image.fromarray(uint8_deconv, 'RGB')
-    #img.save('results/{}_{}_{}.png'.format(layer_name, feature_to_visualize, visualize_mode))
-    plt.axis('off')
-    #plt.axes([0., 0., 1., 1.], frameon=False, xticks=[], yticks=[])
-    plt.imshow(img)
 
 
 def show_result(deconv):
@@ -83,8 +66,12 @@ def show_result(deconv):
     plt.imshow(img)
 
 
-result = main('./husky.jpg', 'block4_conv2', 46, visualize_mode='max')
+# #%debug
+result = main('./husky.jpg', 46)
 
+show_result(result)
+
+result = main('./husky.jpg', 46, visualize_mode='max')
 show_result(result)
 
 model.summary()

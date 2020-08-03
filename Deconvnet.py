@@ -395,24 +395,7 @@ class DInput(object):
         self.down_data = data
         return self.down_data
     
-def visualize(model, data, layer_name, feature_to_visualize, visualize_mode):
-    '''
-    function to visualize feature
-    # Arguments
-        model: Pre-trained model used to visualize data
-        data: image to visualize
-        layer_name: Name of layer to visualize
-        feature_to_visualize: Featuren to visualize
-        visualize_mode: Visualize mode, 'all' or 'max', 'max' will only pick 
-                        the greates activation in a feature map and set others
-                        to 0s, this will indicate which part fire the neuron 
-                        most; 'all' will use all values in a feature map,
-                        which will show what image the filter sees. For 
-                        convolutional layers, There is difference between 
-                        'all' and 'max', for Dense layer, they are the same
-    # Returns
-        The image reflecting feature
-    '''
+def create_deconv(model, layer_name):
     deconv_layers = []
     # Stack layers
     for i in range(len(model.layers)):
@@ -438,7 +421,27 @@ def visualize(model, data, layer_name, feature_to_visualize, visualize_mode):
             sys.exit()
         if layer_name == model.layers[i].name:
             break
+            
+    return deconv_layers
 
+def visualize(deconv_layers, data, feature_to_visualize, visualize_mode):
+    '''
+    function to visualize feature
+    # Arguments
+        deconv_layers: Output of create_deconv()
+        data: image to visualize
+        feature_to_visualize: Featuren to visualize
+        visualize_mode: Visualize mode, 'all' or 'max', 'max' will only pick 
+                        the greates activation in a feature map and set others
+                        to 0s, this will indicate which part fire the neuron 
+                        most; 'all' will use all values in a feature map,
+                        which will show what image the filter sees. For 
+                        convolutional layers, There is difference between 
+                        'all' and 'max', for Dense layer, they are the same
+    # Returns
+        The image reflecting feature
+    '''
+    
     # Forward pass
     deconv_layers[0].up(data)
     for i in range(1, len(deconv_layers)):
@@ -511,8 +514,9 @@ def main():
     img_array = img_array.astype(np.float)
     img_array = imagenet_utils.preprocess_input(img_array)
     
-    deconv = visualize(model, img_array, 
-            layer_name, feature_to_visualize, visualize_mode)
+    deconv_layers = create_deconv(model, layer_name)
+    deconv = visualize(deconv_layers, img_array, 
+            feature_to_visualize, visualize_mode)
     
     # postprocess and save image
     deconv = deconv - deconv.min()
