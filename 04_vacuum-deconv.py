@@ -18,6 +18,8 @@
 # Investigate deconvnets. Initially, we are copying an example that uses a VGG rather than a resnet. It is not currently clear what problems are associated with resnets, or if they can even be used for this.
 #
 # This notebook reproduces the results of https://github.com/jalused/Deconvnet-keras/blob/master/Deconvnet-keras.py after converting to use TF2.2
+#
+# ## Try looking at block5_conv3 - last convolution layer
 
 # %cd /home/jupyter/dev/tflow/deconvnet/Deconvnet-keras
 # %reload_ext autoreload
@@ -42,7 +44,9 @@ model = tf.keras.models.load_model("/home/jupyter/dev/tflow/saved-models/esc_25_
 
 model.summary()
 
-LAYER_NAME = 'block4_conv2'
+model.layers[2].summary()
+
+LAYER_NAME = 'block5_conv3'
 deconv_layers = create_deconv(model, LAYER_NAME)
 
 deconv_layers
@@ -66,35 +70,7 @@ def extract_feature(filename):
 
 
 
-def main(filepath, feature_to_visualize, visualize_mode='all'):
-
-    # Load data and preprocess
-    #img = Image.open(image_path)
-    #img = img.resize((224, 224))
-    #img_array = np.array(img)
-    #img_array = img_array[np.newaxis, :]
-    #img_array = img_array.astype(np.float)
-    #img_array = imagenet_utils.preprocess_input(img_array)
-    
-    data = extract_feature(filepath)
-    deconv = visualize(deconv_layers, data, 
-            feature_to_visualize, visualize_mode)
-    
-    return deconv
-
-
 recordings_dir = "/home/jupyter/dev/tflow/unit_test_files"
-
-result = main(path.join(recordings_dir,"vacuum_cleaner.wav"), 46)
-
-import librosa.display
-def generate_image(spectro):
-    spectro = np.rot90(spectro)
-    spectro = spectro[::-1,:]
-    plt.axis('off')
-    plt.axes([0., 0., 1., 1.], frameon=False, xticks=[], yticks=[])
-    librosa.display.specshow(spectro)
-    plt.plot()
 
 
 def show_image(spectro, cmap='gray'):
@@ -112,12 +88,10 @@ def forward_pass(deconv_layers, data):
     # Forward pass
     deconv_layers[0].up(data)
     for i in range(1, len(deconv_layers)):
-        print(f"{i}")
-        #print(f"{i}: {deconv_layers[i].name}")
+        #print(f"{i}")
         deconv_layers[i].up(deconv_layers[i - 1].up_data)
 
     return deconv_layers[-1].up_data
-
 
 
 output = forward_pass(deconv_layers, extract_feature(path.join(recordings_dir,"vacuum_cleaner.wav")))
@@ -152,7 +126,6 @@ def backward_pass(deconv_layers, output, feature_to_visualize, visualize_mode):
     deconv = deconv.squeeze()
     
     return deconv
-
 
 
 s = extract_feature(path.join(recordings_dir,"vacuum_cleaner.wav"))
@@ -192,5 +165,58 @@ multiplot(max_act[:8])
 
 
 multiplot(max_act[:8],'max')
+
+# +
+try:
+    import tflite_runtime.interpreter as tflite
+except ModuleNotFoundError:
+    import tensorflow.lite as tflite
+
+def get_human_readable_output(output):
+    results = [
+        'breathing', 'car_horn', 'cat',
+        'chainsaw', 'chirping_birds',
+        'clapping', 'coughing', 'cow',
+        'crickets', 'dog', 'door_wood_knock',
+        'engine', 'frog', 'glass_breaking',
+        'hen', 'laughing', 'rain', 'rooster',
+        'sheep', 'siren', 'sneezing',
+        'snoring', 'thunderstorm',
+        'vacuum_cleaner', 'wind'
+    ]
+
+    output = list(output[0])
+
+    largest = max(output)
+    index = list(output).index(largest)
+    #return results[index]
+    result = f"{largest * 100:.2f}% confident that this is a {results[index]}"
+
+    formatted_output = [f"{o*100:05.2f}" for o in output]
+    stats = [f"{x}%: {results[i]}" for i, x in enumerate(formatted_output)]
+
+    return result, "\n".join(stats)
+
+
+def infer_from_file(filename, model_path="/home/jupyter/dev/tflow/saved-models/esc_25_vgg16-03-08-20-14-52.tflite"):
+    interpreter = tflite.Interpreter(model_path=model_path)
+    interpreter.allocate_tensors()
+
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+    input_data = extract_feature(filename)
+
+    interpreter.set_tensor(input_details[0]['index'], input_data)
+    interpreter.invoke()
+    predicted_data_vector = interpreter.get_tensor(output_details[0]['index'])
+
+    return get_human_readable_output(predicted_data_vector)
+
+
+# -
+
+infer_from_file(path.join(recordings_dir,"coughing.wav"))
+
+infer_from_file(path.join(recordings_dir,"dog.wav"))
 
 

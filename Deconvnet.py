@@ -28,8 +28,13 @@ from tensorflow.keras.applications import vgg16, imagenet_utils
 import tensorflow.keras.backend as K
 
 import tensorflow as tf
-tf.compat.v1.disable_v2_behavior()
 
+#tf.compat.v1.disable_v2_behavior()
+
+#Import nasty private function to avoid TF bug. This allows us to avoid
+#disabling v2 behaviour, but it doesn't work for TF2.3 apparently
+# see https://github.com/tensorflow/tensorflow/issues/34201
+from tensorflow.python.keras.backend import symbolic_learning_phase
 
 class DConvolution2D(object):
     '''
@@ -59,7 +64,7 @@ class DConvolution2D(object):
                 padding = 'same',
                 weights = [W, b]
                 )(input)
-        self.up_func = K.function([input, K.learning_phase()], output)
+        self.up_func = K.function([input, symbolic_learning_phase()], output)
 
         # Flip W horizontally and vertically, 
         # and set down_func for DConvolution2D
@@ -78,7 +83,7 @@ class DConvolution2D(object):
                 padding = 'same',
                 weights = [W, b]
                 )(input)
-        self.down_func = K.function([input, K.learning_phase()], output)
+        self.down_func = K.function([input, symbolic_learning_phase()], output)
 
     def up(self, data, learning_phase = 0):
         '''
@@ -89,7 +94,8 @@ class DConvolution2D(object):
         # Returns
             Convolved result
         '''
-        self.up_data = self.up_func([data, learning_phase])
+        lp = tf.constant(False) if learning_phase == 0 else tf.constant(True)
+        self.up_data = self.up_func([data, lp])
         return self.up_data
 
     def down(self, data, learning_phase = 0):
@@ -101,7 +107,8 @@ class DConvolution2D(object):
         # Returns
             Deconvolved result
         '''
-        self.down_data= self.down_func([data, learning_phase])
+        lp = tf.constant(False) if learning_phase == 0 else tf.constant(True)
+        self.down_data= self.down_func([data, lp])
         return self.down_data
     
 
@@ -125,7 +132,7 @@ class DDense(object):
         input = Input(shape = layer.input_shape[1:])
         output = Dense(output_dim = layer.output_shape[1],
                 weights = [W, b])(input)
-        self.up_func = K.function([input, K.learning_phase()], output)
+        self.up_func = K.function([input, symbolic_learning_phase()], output)
         
         #Transpose W and set down_func for DDense
         W = W.transpose()
@@ -137,7 +144,7 @@ class DDense(object):
         output = Dense(
                 output_dim = self.input_shape[1], 
                 weights = flipped_weights)(input)
-        self.down_func = K.function([input, K.learning_phase()], output)
+        self.down_func = K.function([input, symbolic_learning_phase()], output)
     
 
     def up(self, data, learning_phase = 0):
@@ -218,10 +225,11 @@ class DPooling(object):
         out_shape = list(input.shape)
         row_poolsize = int(poolsize[0])
         col_poolsize = int(poolsize[1])
-        out_shape[1] = int(out_shape[1] / poolsize[0])
-        out_shape[2] = int(out_shape[2] / poolsize[1])
+        out_shape[1] = out_shape[1] // poolsize[0]
+        out_shape[2] = out_shape[2] // poolsize[1]
         pooled = np.zeros(out_shape)
         
+        input = input.numpy()
         for sample in range(input.shape[0]):
             for dim in range(input.shape[3]):
                 for row in range(out_shape[1]):
@@ -231,7 +239,12 @@ class DPooling(object):
                                 col * col_poolsize : (col + 1) * col_poolsize,
                                 dim]
                         max_value = patch.max()
+                        #max_value = np.amax(patch)
+                        #max_value = tf.reduce_max(patch)
                         pooled[sample, row, col, dim] = max_value
+                        #max_col_index = K.argmax(patch, axis = 1)
+                        #max_cols = tf.reduce_max(patch, axis = 1)
+                        #max_row = K.argmax(max_cols)
                         max_col_index = patch.argmax(axis = 1)
                         max_cols = patch.max(axis = 1)
                         max_row = max_cols.argmax()
@@ -256,6 +269,8 @@ class DPooling(object):
         tile = np.ones((1, switch.shape[1] // input.shape[1], 
             switch.shape[2] // input.shape[2], 1))
         out = np.kron(input, tile)
+        if out.shape != switch.shape:
+            out.resize(switch.shape)
         unpooled = out * switch
         return unpooled
 
@@ -280,9 +295,9 @@ class DActivation(object):
         # According to the original paper, 
         # In forward pass and backward pass, do the same activation(relu)
         self.up_func = K.function(
-                [input, K.learning_phase()], output)
+                [input, symbolic_learning_phase()], output)
         self.down_func = K.function(
-                [input, K.learning_phase()], output)
+                [input, symbolic_learning_phase()], output)
 
     # Compute activation in forward pass
     def up(self, data, learning_phase = 0):
@@ -294,7 +309,8 @@ class DActivation(object):
         # Returns
             Activation
         '''
-        self.up_data = self.up_func([data, learning_phase])
+        #self.up_data = self.up_func([data, learning_phase])
+        self.up_data = self.activation(data)
         return self.up_data
 
     # Compute activation in backward pass
@@ -307,7 +323,8 @@ class DActivation(object):
         # Returns
             Activation
         '''
-        self.down_data = self.down_func([data, learning_phase])
+        #self.down_data = self.down_func([data, learning_phase])
+        self.down_data = self.activation(data)
         return self.down_data
     
     
@@ -325,7 +342,7 @@ class DFlatten(object):
         self.layer = layer
         self.shape = layer.input_shape[1:]
         self.up_func = K.function(
-                [layer.input, K.learning_phase()], layer.output)
+                [layer.input, symbolic_learning_phase], layer.output)
 
     # Flatten 2D input into 1D output
     def up(self, data, learning_phase = 0):
@@ -399,6 +416,7 @@ def create_deconv(model, layer_name):
     deconv_layers = []
     # Stack layers
     for i in range(len(model.layers)):
+        print(model.layers[i].name)
         if isinstance(model.layers[i], Convolution2D):
             deconv_layers.append(DConvolution2D(model.layers[i]))
             deconv_layers.append(
@@ -415,10 +433,15 @@ def create_deconv(model, layer_name):
             deconv_layers.append(DFlatten(model.layers[i]))
         elif isinstance(model.layers[i], InputLayer):
             deconv_layers.append(DInput(model.layers[i]))
+        elif isinstance(model.layers[i], Model):
+            deconv_layers += create_deconv(model.layers[i], layer_name)
+            break # FIXME - assume we found our layer
         else:
             print('Cannot handle this type of layer')
             print(model.layers[i].get_config())
             sys.exit()
+            
+        deconv_layers[-1].name = model.layers[i].name
         if layer_name == model.layers[i].name:
             break
             

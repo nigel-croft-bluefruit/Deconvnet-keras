@@ -37,6 +37,8 @@ model = vgg16.VGG16(weights = 'imagenet', include_top = True)
 LAYER_NAME = 'block4_conv2'
 deconv_layers = create_deconv(model, LAYER_NAME)
 
+deconv_layers
+
 
 def main(image_path, feature_to_visualize, visualize_mode='all'):
 
